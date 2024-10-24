@@ -15,24 +15,24 @@ from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense
 import numpy as np
 
-class DataProcessor:
+class forecast:
     def __init__(self):
         self.data = None
         self.date_column = None
         self.target_column = None
 
     def upload_data(self):
-        """
-        Uploads a CSV file via Streamlit file uploader
-        """
+        """Uploads a CSV or Excel file via Streamlit file uploader"""
         uploaded_file = st.file_uploader("Upload a CSV or Excel", type=["csv", "xls", "xlsx"])
         if uploaded_file is not None:
-            self.data = pd.read_csv(uploaded_file, encoding='latin1')  # or 'utf-16' depending on the file's encoding
+            if uploaded_file.name.endswith('.csv'):
+                self.data = pd.read_csv(uploaded_file, encoding='latin1')  # or 'utf-16' depending on the file's encoding
+            elif uploaded_file.name.endswith('.xlsx'):
+                self.data = pd.read_excel(uploaded_file, engine='openpyxl')
             st.success("File uploaded successfully!")
-        elif uploaded_file.name.endswith('.xlsx'):
-            self.data = pd.read_excel(uploaded_file, engine='openpyxl')
         else:
-            st.warning("Please upload a CSV file.")
+            st.warning("Please upload a CSV or Excel file.")
+
 
     def preview_data(self):
         """
