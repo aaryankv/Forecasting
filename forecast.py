@@ -1,5 +1,12 @@
-import streamlit as st
+
 import pandas as pd
+import streamlit as st
+import plotly.express as px
+from statsmodels.tsa.seasonal import seasonal_decompose
+from sklearn.preprocessing import StandardScaler,MinMaxScaler
+import dateutil.parser
+import shlex
+import io
 import matplotlib.pyplot as plt
 import seaborn as sns
 from statsmodels.tsa.seasonal import seasonal_decompose
@@ -8,189 +15,551 @@ from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense
 import numpy as np
 
-# Title
-st.title('General Dataset Analysis')
+class DataProcessor:
+    def __init__(self):
+        self.data = None
+        self.date_column = None
+        self.target_column = None
 
-# File upload
-uploaded_file = st.file_uploader("Choose a file", type=['csv', 'xlsx'])
-if uploaded_file is not None:
-    if uploaded_file.name.endswith('.csv'):
-        df = pd.read_csv(uploaded_file)
-    elif uploaded_file.name.endswith('.xlsx'):
-        df = pd.read_excel(uploaded_file, engine='openpyxl')
+    def upload_data(self):
+        """
+        Uploads a CSV file via Streamlit file uploader
+        """
+        uploaded_file = st.file_uploader("Upload a CSV or Excel", type=["csv", "xls", "xlsx"])
+        if uploaded_file is not None:
+            self.data = pd.read_csv(uploaded_file, encoding='latin1')  # or 'utf-16' depending on the file's encoding
+            st.success("File uploaded successfully!")
+        elif uploaded_file.name.endswith('.xlsx'):
+            self.data = pd.read_excel(uploaded_file, engine='openpyxl')
+        else:
+            st.warning("Please upload a CSV file.")
 
-    # Display the dataframe
-    st.write("Uploaded DataFrame:")
-    st.write(df)
+    def preview_data(self):
+        """
+        Displays the first few rows of the uploaded dataset
+        """
+        if self.data is not None:
+            st.write("### Dataset Preview")
+            st.dataframe(self.data.head())
+            # st.write(self.data.columns)
+        else:
+            st.error("No data available to preview.")
+           
+    def data_info(self):
+        """
+        Displays the size and shape of the dataset and a sample of the data
+        """
+        if self.data is not None:
+            st.write("### Dataset Info")
+            
+            # Display the shape of the dataset
+            num_rows, num_cols = self.data.shape
+            st.write(f"**Number of rows:** {num_rows}")
+            st.write(f"**Number of columns:** {num_cols}")
 
-    # Display column names and data types
-    st.write("Column Names and Data Types:")
-    st.write(df.dtypes)
+            # Display null value information using the info() method
+            buf = io.StringIO()
+            self.data.info(buf=buf)
+            s = buf.getvalue()
+            lines = [shlex.split(line) for line in s.splitlines()[3:-2]]
+            print(f"Lines[0]: {lines[0]}")  # Print the column names
+            print(f"Lines[1]: {lines[1]}")  # Print the first row of data
+            
+            # Find the maximum number of columns in the data
+            max_cols = max(len(line) for line in lines)
+            
+            # Pad the column names with None to match the maximum number of columns
+            column_names = lines[0] + [None] * (max_cols - len(lines[0]))
+            
+            info_df = pd.DataFrame(lines[1:], columns=column_names)  # Select all columns
+            st.table(info_df)
+                
+            # Create a bar chart to visualize null value distribution
+            # null_counts = self.data.isnull().sum()
+            # st.write("### Null Value Distribution")
+            # st.bar_chart(null_counts)
+            
+            null_counts = self.data.isnull().sum()
+            total_counts = self.data.shape[0]
 
-    # Display missing values
-    st.write("Missing Values:")
-    missing_values = df.isnull().sum()
-    st.write(missing_values)
+            # Calculate the percentage of null values for each column
+            null_percentages = (null_counts / total_counts) * 100
 
-    # Plot missing values
-    st.write("Missing Values Heatmap:")
-    fig, ax = plt.subplots(figsize=(10, 5))
-    sns.heatmap(df.isnull(), cbar=False, cmap='viridis', yticklabels=False)
-    plt.title('Missing Values Heatmap')
-    st.pyplot(fig)
+            # Create a bar chart using Plotly
+            # fig = px.bar(x=null_percentages.index, y=null_percentages.values, text_auto='.2f')
+            fig = px.bar(x=null_percentages.index, y=null_percentages.values, 
+             color=[ 'high' if val > 25 else 'low' for val in null_percentages.values], 
+             color_discrete_map={'high': '#ee4a28', 'low': '#324bde'},
+             text_auto='.2f')
 
-    # Ask user how to handle missing values
-    if missing_values.sum() > 0:
-        st.write("Handling Missing Values:")
-        method = st.selectbox("Choose method to handle missing values", ['Drop rows', 'Fill with mean', 'Fill with median', 'Fill with mode', 'Interpolate'])
+            fig.update_layout(coloraxis_showscale=False)
+            
+            fig.update_layout(title=" Null Value Distribution in Percentage", 
+                            xaxis_title="Columns", 
+                            yaxis_title="Count of Null Values")
+
+            # Show the plot using Streamlit
+            st.plotly_chart(fig, use_container_width=True)
+            st.markdown("*Note: If the null values are above 25%, they should be removed.")
+        else:
+            st.error("No data available for info.")
         
-        if method == 'Drop rows':
-            df = df.dropna()
-        elif method == 'Fill with mean':
-            df = df.fillna(df.mean())
-        elif method == 'Fill with median':
-            df = df.fillna(df.median())
-        elif method == 'Fill with mode':
-            df = df.fillna(df.mode().iloc[0])
-        elif method == 'Interpolate':
-            df = df.interpolate()
+    def data_statistics(self):
+        """
+        Displays basic statistical summary of the dataset
+        """
+        if self.data is not None:
+            st.write("### Dataset Statistics")
+            st.write(self.data.describe())
+        else:
+            st.error("No data available for statistics.")
+    
 
-        # Display the updated dataframe
-        st.write("Updated DataFrame after handling missing values:")
-        st.write(df)
-    
-    # Ask user to select sales column
-    sales_column = st.selectbox("Select sales column for analysis", df.columns)
-    
-    # Optional Category Analysis
-    if st.checkbox("Perform category analysis?"):
-        category_column = st.selectbox("Select category column", df.columns)
-        st.write("Category Analysis:")
-        fig, ax = plt.subplots(figsize=(10, 5))
-        sns.barplot(x=category_column, y=sales_column, data=df, estimator=sum, ci=None, palette='viridis')
-        plt.title(f'Sales by {category_column}')
-        st.pyplot(fig)
-    
-    # Ensure the Date column is in datetime format
-    date_column = st.selectbox("Select date column", df.select_dtypes(include=['object', 'datetime']).columns)
-    df[date_column] = pd.to_datetime(df[date_column], errors='coerce')
-    df.set_index(date_column, inplace=True)
-    
-    # Resample the data to monthly
-    df_resampled = df[sales_column].resample('M').sum()
-    
-    # Perform Seasonal Decomposition
-    result = seasonal_decompose(df_resampled, model='multiplicative', period=12)
-    
-    # Plotting
-    fig, axs = plt.subplots(4, 1, figsize=(14, 10))
-    result.observed.plot(ax=axs[0], title='Observed')
-    result.trend.plot(ax=axs[1], title='Trend')
-    result.seasonal.plot(ax=axs[2], title='Seasonal')
-    result.resid.plot(ax=axs[3], title='Residual')
-    st.pyplot(fig)
-    
-    # Ask user if they have a weather dataset
-    if st.checkbox("Do you have a weather dataset?"):
-        weather_file = st.file_uploader("Upload your weather dataset", type=['csv', 'xlsx'])
-        if weather_file is not None:
-            if weather_file.name.endswith('.csv'):
-                weather_df = pd.read_csv(weather_file)
-            elif weather_file.name.endswith('.xlsx'):
-                weather_df = pd.read_excel(weather_file, engine='openpyxl')
+    def select_columns(self) -> None:
+        """
+        Selects the date column and target column
+        """
+        if self.data is None:
+            st.error("No data available to select columns.")
+            return
+
+        st.write("### Select Columns")
+        columns = self.data.columns.tolist()
+
+        # Select date column
+        self.date_column = st.selectbox("Select Date Column", columns)
+        if self.date_column:
+            try:
+                self.data[self.date_column] = self.data[self.date_column].apply(dateutil.parser.parse)
+            except ValueError:
+                st.error("Invalid date format for date column. Please select a column with a valid date format.")
+                self.date_column = None
+            else:
+                if not self.data[self.date_column].notnull().all():
+                    st.error("Date column contains null values. Please select a column with no null values.")
+
+        # Select target column
+        if self.date_column:
+            self.target_column = st.selectbox("Select Target Column", [col for col in columns if col != self.date_column])
+            if self.target_column:
+                try:
+                    self.data[self.target_column] = self.data[self.target_column].astype(float)
+                except ValueError:
+                    st.error("Invalid value for target column. Please select a column with numeric values.")
+                    self.target_column = None
+                else:
+                    if not self.data[self.target_column].notnull().all():
+                        st.error("Target column contains null values. Please select a column with no null values.")
+
+
+    def time_series_analysis(self):
+        """
+        Performs time series analysis on the selected column
+        """
+        if self.data is not None and self.date_column is not None and self.target_column is not None:
+            st.write("### Time Series Analysis")
             
-            # Display the weather dataframe
-            st.write("Weather DataFrame:")
-            st.write(weather_df)
+            # Check if the date column already contains datetime objects
+            if self.data[self.date_column].dtype == 'datetime64[ns]':
+                self.data.set_index(self.date_column, inplace=True)
+            else:
+                # Parse the date column using dateutil.parser.parse
+                self.data[self.date_column] = self.data[self.date_column].apply(dateutil.parser.parse)
+                self.data.set_index(self.date_column, inplace=True)
             
-            # Ensure weather dates are in datetime format
-            weather_date_column = st.selectbox("Select date column in weather dataset", weather_df.select_dtypes(include=['object', 'datetime']).columns)
-            weather_df[weather_date_column] = pd.to_datetime(weather_df[weather_date_column], errors='coerce')
+            # # Display the original DataFrame
+            # st.write("### Original DataFrame")
+            # st.write(self.data[[self.target_column]])
+
+            # # Create a line chart for the original time series
+            # st.write("### Original Time Series")
+            # st.line_chart(self.data[[self.target_column]])
+
+            # Add a selectbox for sampling frequency
+            frequency_options = ['Weekly', 'Monthly', 'Quarterly', 'Yearly']
+            frequency = st.selectbox('Select sampling frequency', frequency_options)
+
+            if frequency == 'Weekly':
+                freq_code = 'w'
+            elif frequency == 'Monthly':
+                freq_code = 'M'
+            elif frequency == 'Quarterly':
+                freq_code = 'Q'
+            elif frequency == 'Yearly':
+                freq_code = 'Y'
+
+            # Resample the data to the selected frequency, starting from the first date
+            resampled_data = self.data[[self.target_column]].resample(freq_code, origin=self.data.index[0]).mean()
+
+
+            # Display the resampled DataFrame
+            st.write("### Resampled DataFrame")
+            st.write(resampled_data)
+
+            # Create a line chart for the resampled time series
+            st.write("### Resampled Time Series")
+            st.line_chart(resampled_data)
+
+            # Interpolate missing values
+            # resampled_data.interpolate(method='linear', inplace=True)
+
+            # Perform seasonal decomposition
+            decomposition = seasonal_decompose(resampled_data, model='additive')
+
+            # Create a line chart for the seasonal component
+            st.write("### Seasonal Component")
+            st.line_chart(decomposition.seasonal)
+
+            # Create a line chart for the trend component
+            st.write("### Trend Component")
+            st.line_chart(decomposition.trend)
+
+    def select_influencing_columns(self):
+        """
+        Selects the columns that influence the target column
+        """
+        if self.data is not None and self.target_column is not None and self.date_column is not None:
+            # Create a new DataFrame with the date as the index and the target column as the first column
+            final_df = self.data[[self.target_column]].copy()
+
+            # Get the columns to analyze, excluding the target column and date column
+            columns_to_analyze = [col for col in self.data.columns if col not in [self.target_column, self.date_column]]
+
+            # Allow the user to add  columns to the influencing_df
+            add_columns = st.multiselect("Select columns to include:", columns_to_analyze, key="add_columns_unique")
+
+            final_df = pd.concat([final_df, self.data[add_columns]], axis=1)
+
+            st.write("### Selected Columns DataFrame")
+            st.dataframe(final_df)
+
+            return final_df
+        else:
+            st.error("Please select a date column and a target column.")
+
+    def handle_null_values(self):
+        """
+        Handles null values in the final DataFrame.
+        """
+        final_df = self.select_influencing_columns()
+        if final_df is not None:
+            st.write("### Handling Null Values")
+
+            # Display the percentage of null values in each column
+            null_percentages = (final_df.isnull().sum() / len(final_df)) * 100
+            st.write("#### Null Value Distribution")
+            st.write(null_percentages)
+
+            # Allow the user to choose how to handle null values
+            st.write("#### Choose Null Value Handling Method")
+            null_handling_method = st.selectbox("Select method", ["Mean Imputation", "Interpolation"], key="null_handling_method_unique")
+
+            if null_handling_method == "Mean Imputation":
+                st.write("Handling null values using mean imputation")
+                final_df = final_df.fillna(final_df.mean())
+            elif null_handling_method == "Interpolation":
+                st.write("Handling null values using interpolation")
+                final_df = final_df.interpolate(method='linear')
+
+            # Display the updated null value distribution
+            st.write("#### Updated Null Value Distribution")
+            null_percentages = (final_df.isnull().sum() / len(final_df)) * 100
+            st.write(null_percentages)
+
+            return final_df
+        else:
+            st.error("No data available to handle null values.")
+
+    def feature_scaling(self):
+        """
+        Scales the features in the final DataFrame.
+        """
+        final_df = self.handle_null_values()
+        if final_df is not None and not final_df.empty:
+            st.write("### Feature Scaling")
+
+            # Check if there are any numeric columns to scale
+            numeric_columns = final_df.select_dtypes(include=['float64', 'int64']).columns
+            if len(numeric_columns) == 0:
+                st.error("No numeric columns available for scaling.")
+                return final_df
+
+            # Allow the user to choose which numeric columns to scale
+            columns_to_scale = st.multiselect("Select columns to scale:", numeric_columns, default=list(numeric_columns), key="columns_to_scale")
+
+            if not columns_to_scale:
+                st.warning("No columns selected for scaling. Returning original DataFrame.")
+                return final_df
+
+            # Allow the user to choose a scaling method
+            st.write("#### Choose Scaling Method")
+            scaling_method = st.selectbox("Select method", ["Standard Scaler", "Min-Max Scaler"], key="scaling_method_unique")
+
+            # Create a copy of the DataFrame to avoid modifying the original
+            scaled_df = final_df.copy()
             
-            # Reset index for merging
-            df.reset_index(inplace=True)
-            
-            # Merge with sales data
-            combined_df = pd.merge(df, weather_df, left_on=date_column, right_on=weather_date_column)
-            st.write(weather_df.dtypes)
-            
-            # Display the combined dataframe
-            st.write("Combined DataFrame:")
-            st.write(combined_df)
-            
-            # Perform analysis on combined data (for example, plotting trends with weather)
+            try:
+                if scaling_method == "Standard Scaler":
+                    scaler = StandardScaler()
+                    scaled_df[columns_to_scale] = scaler.fit_transform(scaled_df[columns_to_scale])
+                elif scaling_method == "Min-Max Scaler":
+                    scaler = MinMaxScaler()
+                    scaled_df[columns_to_scale] = scaler.fit_transform(scaled_df[columns_to_scale])
+
+                st.write("#### Scaled DataFrame Preview")
+                st.dataframe(scaled_df.head())
+
+                st.write("#### Scaling Statistics")
+                st.write(scaled_df.describe())
+
+                return scaled_df
+            except Exception as e:
+                st.error(f"An error occurred during scaling: {str(e)}")
+                return final_df
+        else:
+            st.error("No data available for feature scaling.")
+            return None
+        
+
+    def category_analysis(self):
+        """Performs category analysis on the uploaded data"""
+        if st.checkbox("Perform category analysis?"):
+            category_column = st.selectbox("Select category column", self.data.columns)
+            st.write("Category Analysis:")
             fig, ax = plt.subplots(figsize=(10, 5))
-            sns.lineplot(data=combined_df, x=combined_df[date_column], y=sales_column, label='Sales')
-            sns.lineplot(data=combined_df, x=combined_df[date_column], y='Temperature (C)', label='Temperature', ax=ax)
-            plt.title(f'{sales_column} and Temperature Trends')
-            plt.xlabel('Date')
-            plt.ylabel('Value')
-            plt.legend()
+            sns.barplot(x=category_column, y=self.target_column, data=self.data, estimator=sum, ci=None, palette='viridis')
+            plt.title(f'Sales by {category_column}')
             st.pyplot(fig)
 
-    # LSTM for sales forecasting
-    if st.button("Train LSTM and Forecast Sales"):
-        # Group sales by month
-        df_monthly = df.resample('MS')[sales_column].sum()
-        
-        # Prepare data for LSTM
-        data = df_monthly.values.reshape(-1, 1)
-        
-        # Normalize the data
-        scaler = MinMaxScaler(feature_range=(0, 1))
-        scaled_data = scaler.fit_transform(data)
-        
-        # Prepare training and testing datasets
-        train_size = int(len(scaled_data) * 0.8)
-        train_data = scaled_data[:train_size]
-        test_data = scaled_data[train_size:]
+    def weather_data_integration(self):
+        """Integrates weather data with the existing data and performs analysis"""
+        if st.checkbox("Do you have a weather dataset?"):
+            weather_file = st.file_uploader("Upload your weather dataset", type=['csv', 'xlsx'])
+            if weather_file is not None:
+                if weather_file.name.endswith('.csv'):
+                    weather_df = pd.read_csv(weather_file)
+                elif weather_file.name.endswith('.xlsx'):
+                    weather_df = pd.read_excel(weather_file, engine='openpyxl')
 
-        def create_dataset(dataset, time_step=1):
-            dataX, dataY = [], []
-            for i in range(len(dataset) - time_step):
-                dataX.append(dataset[i:(i + time_step), 0])
-                dataY.append(dataset[i + time_step, 0])
-            return np.array(dataX), np.array(dataY)
+                # Display the weather dataframe
+                st.write("Weather DataFrame:")
+                st.write(weather_df)
 
-        time_step = 5  # Adjusted to ensure compatibility with the dataset length
-        X_train, y_train = create_dataset(train_data, time_step)
-        X_test, y_test = create_dataset(test_data, time_step)
+                # Ensure weather dates are in datetime format
+                weather_date_column = st.selectbox("Select date column in weather dataset", weather_df.select_dtypes(include=['object', 'datetime']).columns)
+                weather_df[weather_date_column] = pd.to_datetime(weather_df[weather_date_column], errors='coerce')
 
-        # Ensure there's enough data to reshape
-        if X_train.shape[0] == 0 or X_test.shape[0] == 0:
-            raise ValueError("Insufficient data for the given time_step. Try reducing the time_step value even further.")
+                # Reset index for merging
+                self.data.reset_index(inplace=True)
 
-        # Reshape input to be [samples, time steps, features] which is required for LSTM
-        X_train = X_train.reshape(X_train.shape[0], X_train.shape[1], 1)
-        X_test = X_test.reshape(X_test.shape[0], X_test.shape[1], 1)
-        
-        # Create and train LSTM model
-        model = Sequential()
-        model.add(LSTM(50, return_sequences=True, input_shape=(time_step, 1)))
-        model.add(LSTM(50, return_sequences=False))
-        model.add(Dense(25))
-        model.add(Dense(1))
-        model.compile(optimizer='adam', loss='mean_squared_error')
-        model.fit(X_train, y_train, batch_size=1, epochs=1)
-        
-        # Make predictions
-        train_predict = model.predict(X_train)
-        test_predict = model.predict(X_test)
-        
-        # Transform back to original form
-        train_predict = scaler.inverse_transform(train_predict)
-        test_predict = scaler.inverse_transform(test_predict)
-        
-        # Plot the results
-        plt.figure(figsize=(14, 8))
-        # Corrected plotting
-        train_index = df_monthly.index[time_step:time_step + len(train_predict)]
-        test_index = df_monthly.index[time_step + len(train_predict):time_step + len(train_predict) + len(test_predict)]
-        plt.plot(df_monthly.index, data, label='Original Sales')
-        plt.plot(train_index, train_predict, label='Train Prediction')
-        plt.plot(test_index, test_predict, label='Test Prediction')
-        plt.xlabel('Date')
-        plt.ylabel('Sales')
-        plt.title('Sales Forecasting using LSTM')
-        plt.legend()
-        st.pyplot(plt)
+                # Merge with sales data
+                combined_df = pd.merge(self.data, weather_df, left_on=self.date_column, right_on=weather_date_column)
+                st.write(weather_df.dtypes)
+
+                # Display the combined dataframe
+                st.write("Combined DataFrame:")
+                st.write(combined_df)
+
+                # Perform analysis on combined data (for example, plotting trends with weather)
+                fig, ax = plt.subplots(figsize=(10, 5))
+                sns.lineplot(data=combined_df, x=combined_df[self.date_column], y=self.target_column, label='Sales')
+                sns.lineplot(data=combined_df, x=combined_df[self.date_column], y='Temperature (C)', label='Temperature', ax=ax)
+                plt.title(f'{self.target_column} and Temperature Trends')
+                plt.xlabel('Date')
+                plt.ylabel('Value')
+                plt.legend()
+                st.pyplot(fig)
+
+
+
+    def forecasting(self):
+        """Performs LSTM based forecasting on the uploaded data"""
+        if self.data is not None:
+            # Use self.date_column and self.target_column directly
+            date_column = self.date_column
+            target_column = self.target_column
+
+
+            # Resample the data to monthly
+            df_monthly = self.data[target_column].resample('M').sum()
+
+            # Ask user for number of months to predict and number of months of historical data for training
+            future_months = st.number_input("How many months into the future would you like to predict?", min_value=1, value=12)
+            history_months = st.number_input("How many months of historical data do you want to use for training?", min_value=1, value=60)
+
+            if st.button("Train LSTM and Forecast Sales"):
+                # Prepare data for LSTM
+                data = df_monthly.values.reshape(-1, 1)
+                scaler = MinMaxScaler(feature_range=(0, 1))
+                scaled_data = scaler.fit_transform(data)
+
+                # Prepare training and testing datasets
+                train_size = int(len(scaled_data) * 0.8)
+                train_data = scaled_data[:train_size]
+                test_data = scaled_data[train_size:]
+
+                def create_dataset(dataset, time_step=1):
+                    dataX, dataY = [], []
+                    for i in range(len(dataset) - time_step):
+                        dataX.append(dataset[i:(i + time_step), 0])
+                        dataY.append(dataset[i + time_step, 0])
+                    return np.array(dataX), np.array(dataY)
+
+                time_step = history_months  # Use user-defined historical months for training
+                X_train, y_train = create_dataset(train_data, time_step)
+                X_test, y_test = create_dataset(test_data, time_step)
+
+                if X_train.shape[0] == 0 or X_test.shape[0] == 0:
+                    st.error("Insufficient data for the given time_step. Try reducing the time_step value even further.")
+                    return
+
+                X_train = X_train.reshape(X_train.shape[0], X_train.shape[1], 1)
+                X_test = X_test.reshape(X_test.shape[0], X_test.shape[1], 1)
+
+                # Create and train LSTM model
+                model = Sequential()
+                model.add(LSTM(50, return_sequences=True, input_shape=(time_step, 1)))
+                model.add(LSTM(50, return_sequences=False))
+                model.add(Dense(25))
+                model.add(Dense(1))
+                model.compile(optimizer='adam', loss='mean_squared_error')
+                model.fit(X_train, y_train, batch_size=1, epochs=1)
+
+                # Make predictions
+                train_predict = model.predict(X_train)
+                test_predict = model.predict(X_test)
+
+                train_predict = scaler.inverse_transform(train_predict)
+                test_predict = scaler.inverse_transform(test_predict)
+
+                # Plot the results
+                plt.figure(figsize=(14, 8))
+                train_index = df_monthly.index[time_step:time_step + len(train_predict)]
+                test_index = df_monthly.index[time_step + len(train_predict):time_step + len(train_predict) + len(test_predict)]
+                plt.plot(df_monthly.index, data, label='Original Sales')
+                plt.plot(train_index, train_predict, label='Train Prediction')
+                plt.plot(test_index, test_predict, label='Test Prediction')
+
+                # Extend predictions into the future
+                last_date = df_monthly.index[-1]
+                future_dates = pd.date_range(last_date, periods=future_months + 1, freq='MS')[1:]
+
+                future_predictions = []
+                last_known_data = scaled_data[-time_step:]
+                current_batch = last_known_data.reshape((1, time_step, 1))
+
+                for _ in range(future_months):
+                    future_pred = model.predict(current_batch)[0]
+                    future_predictions.append(future_pred)
+                    current_batch = np.append(current_batch[:, 1:, :], [[future_pred]], axis=1)
+
+                future_predictions = scaler.inverse_transform(np.array(future_predictions).reshape(-1, 1))
+
+                plt.plot(future_dates, future_predictions, label='Future Predictions')
+                plt.xlabel('Date')
+                plt.ylabel('Sales')
+                plt.title('Sales Forecasting using LSTM')
+                plt.legend()
+                st.pyplot(plt)
+
+    def forecasting1(self):
+        """Performs LSTM based forecasting on the uploaded data"""
+        if self.data is not None:
+            # Use self.date_column and self.target_column directly
+            date_column = self.date_column
+            target_column = self.target_column
+
+            # Resample the data to monthly
+            df_resampled = self.data[target_column].resample('M').sum()
+
+            # Ask user for number of months to predict and number of months of historical data for training
+            future_months = st.number_input("How many months into the future would you like to predict?", min_value=1, value=12)
+            history_months = st.number_input("How many months of historical data do you want to use for training?", min_value=1, value=60)
+
+            # Ask user for the frequency of the forecast graph
+            frequency = st.selectbox("Select forecast frequency", ["Monthly", "Quarterly", "Yearly"])
+            freq_code = 'M'
+            if frequency == "Quarterly":
+                freq_code = 'Q'
+            elif frequency == "Yearly":
+                freq_code = 'Y'
+
+            if st.button("Train LSTM and Forecast Sales"):
+                # Prepare data for LSTM
+                data = df_resampled.values.reshape(-1, 1)
+                scaler = MinMaxScaler(feature_range=(0, 1))
+                scaled_data = scaler.fit_transform(data)
+
+                # Prepare training and testing datasets
+                train_size = int(len(scaled_data) * 0.8)
+                train_data = scaled_data[:train_size]
+                test_data = scaled_data[train_size:]
+
+                def create_dataset(dataset, time_step=1):
+                    dataX, dataY = [], []
+                    for i in range(len(dataset) - time_step):
+                        dataX.append(dataset[i:(i + time_step), 0])
+                        dataY.append(dataset[i + time_step, 0])
+                    return np.array(dataX), np.array(dataY)
+
+                time_step = history_months  # Use user-defined historical months for training
+                X_train, y_train = create_dataset(train_data, time_step)
+                X_test, y_test = create_dataset(test_data, time_step)
+
+                if X_train.shape[0] == 0 or X_test.shape[0] == 0:
+                    st.error("Insufficient data for the given time_step. Try reducing the time_step value even further.")
+                    return
+
+                X_train = X_train.reshape(X_train.shape[0], X_train.shape[1], 1)
+                X_test = X_test.reshape(X_test.shape[0], X_test.shape[1], 1)
+
+                # Create and train LSTM model
+                model = Sequential()
+                model.add(LSTM(50, return_sequences=True, input_shape=(time_step, 1)))
+                model.add(LSTM(50, return_sequences=False))
+                model.add(Dense(25))
+                model.add(Dense(1))
+                model.compile(optimizer='adam', loss='mean_squared_error')
+                model.fit(X_train, y_train, batch_size=1, epochs=1)
+
+                # Make predictions
+                train_predict = model.predict(X_train)
+                test_predict = model.predict(X_test)
+
+                train_predict = scaler.inverse_transform(train_predict)
+                test_predict = scaler.inverse_transform(test_predict)
+
+                # Plot the results
+                plt.figure(figsize=(14, 8))
+                train_index = df_resampled.index[time_step:time_step + len(train_predict)]
+                test_index = df_resampled.index[time_step + len(train_predict):time_step + len(train_predict) + len(test_predict)]
+                plt.plot(df_resampled.index, data, label='Original Sales')
+                plt.plot(train_index, train_predict, label='Train Prediction')
+                plt.plot(test_index, test_predict, label='Test Prediction')
+
+                # Extend predictions into the future
+                last_date = df_resampled.index[-1]
+                future_dates = pd.date_range(last_date, periods=future_months + 1, freq='MS')[1:]
+
+                future_predictions = []
+                last_known_data = scaled_data[-time_step:]
+                current_batch = last_known_data.reshape((1, time_step, 1))
+
+                for _ in range(future_months):
+                    future_pred = model.predict(current_batch)[0]
+                    future_predictions.append(future_pred)
+                    current_batch = np.append(current_batch[:, 1:, :], [[future_pred]], axis=1)
+
+                future_predictions = scaler.inverse_transform(np.array(future_predictions).reshape(-1, 1))
+
+                # Resample future predictions based on selected frequency
+                future_dates = future_dates[:len(future_predictions)]  # Adjust future_dates to match future_predictions length
+                future_df = pd.DataFrame(future_predictions, index=future_dates, columns=['Forecast'])
+                future_df_resampled = future_df.resample(freq_code).sum()
+
+                plt.plot(future_df_resampled.index, future_df_resampled['Forecast'], label='Future Predictions')
+                plt.xlabel('Date')
+                plt.ylabel('Sales')
+                plt.title(f'Sales Forecasting using LSTM ({frequency})')
+                plt.legend()
+                st.pyplot(plt)
