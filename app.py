@@ -1,13 +1,12 @@
-# src/app.py
 
 import streamlit as st
-from forecast import DataProcessor
+from forecast import forecast
 
 # Streamlit App Title
 st.title("Sales Forecasting Data Upload")
 
 # Instantiate DataProcessor object
-forecast = DataProcessor()
+forecast = forecast()
 
 # Step 1: Upload data
 forecast.upload_data()
