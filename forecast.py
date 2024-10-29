@@ -2,6 +2,7 @@
 import pandas as pd
 import streamlit as st
 import plotly.express as px
+import plotly.graph_objects as go
 from statsmodels.tsa.seasonal import seasonal_decompose
 from sklearn.preprocessing import StandardScaler,MinMaxScaler
 import dateutil.parser
@@ -12,7 +13,8 @@ import seaborn as sns
 from statsmodels.tsa.seasonal import seasonal_decompose
 from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Dense
+from tensorflow.keras.layers import LSTM, Dense, Dropout, Bidirectional
+from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
 import numpy as np
 
 class forecast:
@@ -324,6 +326,7 @@ class forecast:
     def category_analysis(self):
         """Performs category analysis on the uploaded data"""
         if st.checkbox("Perform category analysis?"):
+            st.balloons()
             category_column = st.selectbox("Select category column", self.data.columns)
             st.write("Category Analysis:")
             fig, ax = plt.subplots(figsize=(10, 5))
@@ -334,6 +337,7 @@ class forecast:
     def weather_data_integration(self):
         """Integrates weather data with the existing data and performs analysis"""
         if st.checkbox("Do you have a weather dataset?"):
+            st.balloons()
             weather_file = st.file_uploader("Upload your weather dataset", type=['csv', 'xlsx'])
             if weather_file is not None:
                 if weather_file.name.endswith('.csv'):
@@ -369,197 +373,191 @@ class forecast:
                 plt.ylabel('Value')
                 plt.legend()
                 st.pyplot(fig)
-
-
-
+                
     def forecasting(self):
-        """Performs LSTM based forecasting on the uploaded data"""
+        """Performs bidirectional LSTM-based forecasting on the uploaded data."""
         if self.data is not None:
-            # Use self.date_column and self.target_column directly
-            date_column = self.date_column
             target_column = self.target_column
+            # Resample data to weekly frequency
+            df_resampled = self.data[target_column].resample('W').sum()
+            # Prepare data for LSTM
+            data = df_resampled.values.reshape(-1, 1)
+            scaler = MinMaxScaler(feature_range=(0, 1))
+            scaled_data = scaler.fit_transform(data)
+            # Define a time step
+            time_step = 10  # Using 10 weeks as the time step for better context
 
+            def create_dataset(dataset, time_step=1):
+                X, Y = [], []
+                for i in range(len(dataset) - time_step):
+                    X.append(dataset[i:i + time_step, 0])
+                    Y.append(dataset[i + time_step, 0])
+                return np.array(X), np.array(Y)
 
-            # Resample the data to monthly
-            df_monthly = self.data[target_column].resample('M').sum()
+            # Split data into training and testing sets
+            train_size = int(len(scaled_data) * 0.8)
+            train, test = scaled_data[:train_size], scaled_data[train_size:]
+            # Create dataset using the training data
+            X_train, y_train = create_dataset(train, time_step)
+            X_train = X_train.reshape((X_train.shape[0], X_train.shape[1], 1))
+            # Create dataset using the test data
+            X_test, y_test = create_dataset(test, time_step)
+            X_test = X_test.reshape((X_test.shape[0], X_test.shape[1], 1))
 
-            # Ask user for number of months to predict and number of months of historical data for training
-            future_months = st.number_input("How many months into the future would you like to predict?", min_value=1, value=12)
-            history_months = st.number_input("How many months of historical data do you want to use for training?", min_value=1, value=60)
+            # Build and train the bidirectional LSTM model
+            model = Sequential()
+            model.add(Bidirectional(LSTM(100, return_sequences=True), input_shape=(time_step, 1)))
+            model.add(Dropout(0.2))  # Prevent overfitting
+            model.add(Bidirectional(LSTM(100, return_sequences=False)))
+            model.add(Dropout(0.2))
+            model.add(Dense(25, activation='relu'))
+            model.add(Dense(1))
+            model.compile(optimizer='adam', loss='mean_squared_error')
+            model.fit(X_train, y_train, batch_size=16, epochs=100, verbose=1)
 
-            if st.button("Train LSTM and Forecast Sales"):
-                # Prepare data for LSTM
-                data = df_monthly.values.reshape(-1, 1)
-                scaler = MinMaxScaler(feature_range=(0, 1))
-                scaled_data = scaler.fit_transform(data)
+            # Make predictions on the training data
+            train_predictions = model.predict(X_train)
+            train_predictions = scaler.inverse_transform(train_predictions)
+            # Make predictions on the test data
+            test_predictions = model.predict(X_test)
+            test_predictions = scaler.inverse_transform(test_predictions)
+            
+            # Inverse transform predictions to original scale
+            # Adjust the predictions index for plotting
+            predicted_index_train = df_resampled.index[time_step:train_size]
+            predicted_index_test = df_resampled.index[train_size + time_step:]
 
-                # Prepare training and testing datasets
-                train_size = int(len(scaled_data) * 0.8)
-                train_data = scaled_data[:train_size]
-                test_data = scaled_data[train_size:]
+            # Prepare for future predictions
+            future_weeks = 32  # Define how many weeks to predict
+            future_predictions = []
+            # Use the full history of scaled data for future predictions
+            last_known_data = scaled_data[-time_step:].tolist()  # Convert to list for appending
+            for _ in range(future_weeks):
+                # Prepare the current batch for prediction
+                current_batch = np.array(last_known_data[-time_step:]).reshape((1, time_step, 1))
+                future_pred = model.predict(current_batch)[0]
+                future_predictions.append(future_pred[0])  # Append the prediction
+                last_known_data.append(future_pred)  # Add the prediction to the history for the next step
+            future_predictions = scaler.inverse_transform(np.array(future_predictions).reshape(-1, 1))
 
-                def create_dataset(dataset, time_step=1):
-                    dataX, dataY = [], []
-                    for i in range(len(dataset) - time_step):
-                        dataX.append(dataset[i:(i + time_step), 0])
-                        dataY.append(dataset[i + time_step, 0])
-                    return np.array(dataX), np.array(dataY)
+            # Generate future dates
+            last_date = df_resampled.index[-1]
+            future_dates = pd.date_range(last_date, periods=future_weeks + 1, freq='W')[1:]
 
-                time_step = history_months  # Use user-defined historical months for training
-                X_train, y_train = create_dataset(train_data, time_step)
-                X_test, y_test = create_dataset(test_data, time_step)
+            # Prepare future predictions DataFrame
+            future_df = pd.DataFrame(future_predictions, index=future_dates, columns=['Forecast'])
 
-                if X_train.shape[0] == 0 or X_test.shape[0] == 0:
-                    st.error("Insufficient data for the given time_step. Try reducing the time_step value even further.")
-                    return
+            # Prepare data for Plotly
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=df_resampled.index, y=data.flatten(), mode='lines', name='Original Sales', line=dict(color='black')))
+            fig.add_trace(go.Scatter(x=predicted_index_train, y=train_predictions.flatten(), mode='lines', name='Train Predictions', line=dict(color='#FF5733')))  # Train predictions
+            fig.add_trace(go.Scatter(x=predicted_index_test, y=test_predictions.flatten(), mode='lines', name='Test Predictions', line=dict(color='#3357FF')))  # Test predictions
+            fig.add_trace(go.Scatter(x=future_df.index, y=future_df['Forecast'], mode='lines', name='Future Predictions', line=dict(color='#75FF33')))  # Future predictions
 
-                X_train = X_train.reshape(X_train.shape[0], X_train.shape[1], 1)
-                X_test = X_test.reshape(X_test.shape[0], X_test.shape[1], 1)
+            # Update layout
+            fig.update_layout(title='Sales Forecasting using Bidirectional LSTM',
+                            xaxis_title='Date',
+                            yaxis_title='Sales',
+                            legend_title='Legend',
+                            template='plotly_white')
 
-                # Create and train LSTM model
-                model = Sequential()
-                model.add(LSTM(50, return_sequences=True, input_shape=(time_step, 1)))
-                model.add(LSTM(50, return_sequences=False))
-                model.add(Dense(25))
-                model.add(Dense(1))
-                model.compile(optimizer='adam', loss='mean_squared_error')
-                model.fit(X_train, y_train, batch_size=1, epochs=1)
-
-                # Make predictions
-                train_predict = model.predict(X_train)
-                test_predict = model.predict(X_test)
-
-                train_predict = scaler.inverse_transform(train_predict)
-                test_predict = scaler.inverse_transform(test_predict)
-
-                # Plot the results
-                plt.figure(figsize=(14, 8))
-                train_index = df_monthly.index[time_step:time_step + len(train_predict)]
-                test_index = df_monthly.index[time_step + len(train_predict):time_step + len(train_predict) + len(test_predict)]
-                plt.plot(df_monthly.index, data, label='Original Sales')
-                plt.plot(train_index, train_predict, label='Train Prediction')
-                plt.plot(test_index, test_predict, label='Test Prediction')
-
-                # Extend predictions into the future
-                last_date = df_monthly.index[-1]
-                future_dates = pd.date_range(last_date, periods=future_months + 1, freq='MS')[1:]
-
-                future_predictions = []
-                last_known_data = scaled_data[-time_step:]
-                current_batch = last_known_data.reshape((1, time_step, 1))
-
-                for _ in range(future_months):
-                    future_pred = model.predict(current_batch)[0]
-                    future_predictions.append(future_pred)
-                    current_batch = np.append(current_batch[:, 1:, :], [[future_pred]], axis=1)
-
-                future_predictions = scaler.inverse_transform(np.array(future_predictions).reshape(-1, 1))
-
-                plt.plot(future_dates, future_predictions, label='Future Predictions')
-                plt.xlabel('Date')
-                plt.ylabel('Sales')
-                plt.title('Sales Forecasting using LSTM')
-                plt.legend()
-                st.pyplot(plt)
+            # Display plot
+            st.plotly_chart(fig)
 
     def forecasting1(self):
-        """Performs LSTM based forecasting on the uploaded data"""
+        """Performs bidirectional LSTM-based forecasting on the uploaded data."""
         if self.data is not None:
-            # Use self.date_column and self.target_column directly
-            date_column = self.date_column
             target_column = self.target_column
+            # Resample data to weekly frequency
+            df_resampled = self.data[target_column].resample('W').sum()
+            # Prepare data for LSTM
+            data = df_resampled.values.reshape(-1, 1)
+            scaler = MinMaxScaler(feature_range=(0, 1))
+            scaled_data = scaler.fit_transform(data)
 
-            # Resample the data to monthly
-            df_resampled = self.data[target_column].resample('M').sum()
+            # Ask user for the time step
+            time_step = st.number_input("Enter the time step (number of weeks) for LSTM input:", min_value=1, value=10)
 
-            # Ask user for number of months to predict and number of months of historical data for training
-            future_months = st.number_input("How many months into the future would you like to predict?", min_value=1, value=12)
-            history_months = st.number_input("How many months of historical data do you want to use for training?", min_value=1, value=60)
+            def create_dataset(dataset, time_step=1):
+                X, Y = [], []
+                for i in range(len(dataset) - time_step):
+                    X.append(dataset[i:i + time_step, 0])
+                    Y.append(dataset[i + time_step, 0])
+                return np.array(X), np.array(Y)
 
-            # Ask user for the frequency of the forecast graph
-            frequency = st.selectbox("Select forecast frequency", ["Monthly", "Quarterly", "Yearly"])
-            freq_code = 'M'
-            if frequency == "Quarterly":
-                freq_code = 'Q'
-            elif frequency == "Yearly":
-                freq_code = 'Y'
+            # Split data into training and testing sets
+            train_size = int(len(scaled_data) * 0.8)
+            train, test = scaled_data[:train_size], scaled_data[train_size:]
+            # Create dataset using the training data
+            X_train, y_train = create_dataset(train, time_step)
+            X_train = X_train.reshape((X_train.shape[0], X_train.shape[1], 1))
+            # Create dataset using the test data
+            X_test, y_test = create_dataset(test, time_step)
+            X_test = X_test.reshape((X_test.shape[0], X_test.shape[1], 1))
+
+            # Ask user for future weeks
+            future_weeks = st.number_input("How many weeks into the future would you like to predict?", min_value=1, value=32)
+
+            # Ask user for colors
+            train_color = st.color_picker("Pick a color for Train Predictions", "#FF5733")
+            test_color = st.color_picker("Pick a color for Test Predictions", "#3357FF")
+            future_color = st.color_picker("Pick a color for Future Predictions", "#75FF33")
 
             if st.button("Train LSTM and Forecast Sales"):
-                # Prepare data for LSTM
-                data = df_resampled.values.reshape(-1, 1)
-                scaler = MinMaxScaler(feature_range=(0, 1))
-                scaled_data = scaler.fit_transform(data)
-
-                # Prepare training and testing datasets
-                train_size = int(len(scaled_data) * 0.8)
-                train_data = scaled_data[:train_size]
-                test_data = scaled_data[train_size:]
-
-                def create_dataset(dataset, time_step=1):
-                    dataX, dataY = [], []
-                    for i in range(len(dataset) - time_step):
-                        dataX.append(dataset[i:(i + time_step), 0])
-                        dataY.append(dataset[i + time_step, 0])
-                    return np.array(dataX), np.array(dataY)
-
-                time_step = history_months  # Use user-defined historical months for training
-                X_train, y_train = create_dataset(train_data, time_step)
-                X_test, y_test = create_dataset(test_data, time_step)
-
-                if X_train.shape[0] == 0 or X_test.shape[0] == 0:
-                    st.error("Insufficient data for the given time_step. Try reducing the time_step value even further.")
-                    return
-
-                X_train = X_train.reshape(X_train.shape[0], X_train.shape[1], 1)
-                X_test = X_test.reshape(X_test.shape[0], X_test.shape[1], 1)
-
-                # Create and train LSTM model
+                # Build and train the bidirectional LSTM model
                 model = Sequential()
-                model.add(LSTM(50, return_sequences=True, input_shape=(time_step, 1)))
-                model.add(LSTM(50, return_sequences=False))
-                model.add(Dense(25))
+                model.add(Bidirectional(LSTM(100, return_sequences=True), input_shape=(time_step, 1)))
+                model.add(Dropout(0.2))
+                model.add(Bidirectional(LSTM(100, return_sequences=False)))
+                model.add(Dropout(0.2))
+                model.add(Dense(25, activation='relu'))
                 model.add(Dense(1))
                 model.compile(optimizer='adam', loss='mean_squared_error')
-                model.fit(X_train, y_train, batch_size=1, epochs=1)
+                model.fit(X_train, y_train, batch_size=16, epochs=100, verbose=1)
 
-                # Make predictions
-                train_predict = model.predict(X_train)
-                test_predict = model.predict(X_test)
+                # Make predictions on the training data
+                train_predictions = model.predict(X_train)
+                train_predictions = scaler.inverse_transform(train_predictions)
+                # Make predictions on the test data
+                test_predictions = model.predict(X_test)
+                test_predictions = scaler.inverse_transform(test_predictions)
 
-                train_predict = scaler.inverse_transform(train_predict)
-                test_predict = scaler.inverse_transform(test_predict)
+                # Inverse transform predictions to original scale
+                predicted_index_train = df_resampled.index[time_step:train_size]
+                predicted_index_test = df_resampled.index[train_size + time_step:]
 
-                # Plot the results
-                plt.figure(figsize=(14, 8))
-                train_index = df_resampled.index[time_step:time_step + len(train_predict)]
-                test_index = df_resampled.index[time_step + len(train_predict):time_step + len(train_predict) + len(test_predict)]
-                plt.plot(df_resampled.index, data, label='Original Sales')
-                plt.plot(train_index, train_predict, label='Train Prediction')
-                plt.plot(test_index, test_predict, label='Test Prediction')
-
-                # Extend predictions into the future
-                last_date = df_resampled.index[-1]
-                future_dates = pd.date_range(last_date, periods=future_months + 1, freq='MS')[1:]
-
+                # Prepare for future predictions
                 future_predictions = []
-                last_known_data = scaled_data[-time_step:]
-                current_batch = last_known_data.reshape((1, time_step, 1))
-
-                for _ in range(future_months):
+                last_known_data = scaled_data[-time_step:].tolist()
+                for _ in range(future_weeks):
+                    current_batch = np.array(last_known_data[-time_step:]).reshape((1, time_step, 1))
                     future_pred = model.predict(current_batch)[0]
-                    future_predictions.append(future_pred)
-                    current_batch = np.append(current_batch[:, 1:, :], [[future_pred]], axis=1)
-
+                    future_predictions.append(future_pred[0])
+                    last_known_data.append(future_pred)
                 future_predictions = scaler.inverse_transform(np.array(future_predictions).reshape(-1, 1))
 
-                # Resample future predictions based on selected frequency
-                future_dates = future_dates[:len(future_predictions)]  # Adjust future_dates to match future_predictions length
-                future_df = pd.DataFrame(future_predictions, index=future_dates, columns=['Forecast'])
-                future_df_resampled = future_df.resample(freq_code).sum()
+                # Generate future dates
+                last_date = df_resampled.index[-1]
+                future_dates = pd.date_range(last_date, periods=future_weeks + 1, freq='W')[1:]
 
-                plt.plot(future_df_resampled.index, future_df_resampled['Forecast'], label='Future Predictions')
-                plt.xlabel('Date')
-                plt.ylabel('Sales')
-                plt.title(f'Sales Forecasting using LSTM ({frequency})')
-                plt.legend()
-                st.pyplot(plt)
+                # Prepare future predictions DataFrame
+                future_df = pd.DataFrame(future_predictions, index=future_dates, columns=['Forecast'])
+
+                # Prepare data for Plotly
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(x=df_resampled.index, y=data.flatten(), mode='lines', name='Original Sales', line=dict(color='black')))
+                fig.add_trace(go.Scatter(x=predicted_index_train, y=train_predictions.flatten(), mode='lines', name='Train Predictions', line=dict(color=train_color)))
+                fig.add_trace(go.Scatter(x=predicted_index_test, y=test_predictions.flatten(), mode='lines', name='Test Predictions', line=dict(color=test_color)))
+                fig.add_trace(go.Scatter(x=future_df.index, y=future_df['Forecast'], mode='lines', name='Future Predictions', line=dict(color=future_color)))
+
+                # Update layout
+                fig.update_layout(
+                    title='Sales Forecasting using Bidirectional LSTM',
+                    xaxis_title='Date',
+                    yaxis_title='Sales',
+                    legend_title='Legend',
+                    template='plotly_white'
+                )
+
+                # Display plot
+                st.plotly_chart(fig)
