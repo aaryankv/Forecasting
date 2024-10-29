@@ -499,6 +499,7 @@ class forecast:
             future_weeks = st.number_input("How many weeks into the future would you like to predict?", min_value=1, value=32)
 
             # Ask user for colors
+            original_color = st.color_picker("Pick a color for Original Data", "#FF7")
             train_color = st.color_picker("Pick a color for Train Predictions", "#FF5733")
             test_color = st.color_picker("Pick a color for Test Predictions", "#3357FF")
             future_color = st.color_picker("Pick a color for Future Predictions", "#75FF33")
@@ -545,7 +546,7 @@ class forecast:
 
                 # Prepare data for Plotly
                 fig = go.Figure()
-                fig.add_trace(go.Scatter(x=df_resampled.index, y=data.flatten(), mode='lines', name='Original Sales', line=dict(color='black')))
+                fig.add_trace(go.Scatter(x=df_resampled.index, y=data.flatten(), mode='lines', name='Original Sales', line=dict(color=original_color)))
                 fig.add_trace(go.Scatter(x=predicted_index_train, y=train_predictions.flatten(), mode='lines', name='Train Predictions', line=dict(color=train_color)))
                 fig.add_trace(go.Scatter(x=predicted_index_test, y=test_predictions.flatten(), mode='lines', name='Test Predictions', line=dict(color=test_color)))
                 fig.add_trace(go.Scatter(x=future_df.index, y=future_df['Forecast'], mode='lines', name='Future Predictions', line=dict(color=future_color)))
