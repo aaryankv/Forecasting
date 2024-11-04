@@ -34,6 +34,13 @@ forecast.feature_scaling()
 
 forecast.category_analysis()
 
-forecast.forecasting1()
-
+print("Which Model Do You Want To Use")
+model=st.radio("Pick The Model",["LSTM1","LSTM2","GRU"])
+if(model==("LSTM1")):
+    forecast.forecasting1()
+elif(model==("LSTM2")):
+    forecast.forecasting2()
+else:
+    forecast.forecasting3()
+    
 forecast.weather_data_integration()
