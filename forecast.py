@@ -13,7 +13,7 @@ import seaborn as sns
 from statsmodels.tsa.seasonal import seasonal_decompose
 from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Dense, Dropout, Bidirectional
+from tensorflow.keras.layers import LSTM, Dense, Dropout, Bidirectional, GRU
 from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
 import numpy as np
 
@@ -561,4 +561,214 @@ class forecast:
                 )
 
                 # Display plot
+                st.plotly_chart(fig)
+
+    def forecasting2(self):
+        """Improved Bidirectional LSTM forecasting with optimized structure and parameters."""
+        if self.data is not None:
+            target_column = self.target_column
+            # Resample data to weekly frequency
+            df_resampled = self.data[target_column].resample('W').sum()
+            
+            # Prepare data for LSTM
+            data = df_resampled.values.reshape(-1, 1)
+            scaler = MinMaxScaler(feature_range=(0, 1))
+            scaled_data = scaler.fit_transform(data)
+
+            # Set time step
+            time_step = st.number_input("Enter the time step (number of weeks) for LSTM input:", min_value=1, value=10)
+
+            def create_dataset(dataset, time_step=1):
+                X, Y = [], []
+                for i in range(len(dataset) - time_step):
+                    X.append(dataset[i:i + time_step, 0])
+                    Y.append(dataset[i + time_step, 0])
+                return np.array(X), np.array(Y)
+
+            # Split data into training and testing sets
+            train_size = int(len(scaled_data) * 0.85)  # Using 85% of data for training
+            train, test = scaled_data[:train_size], scaled_data[train_size:]
+            
+            # Create dataset using the training data
+            X_train, y_train = create_dataset(train, time_step)
+            X_train = X_train.reshape((X_train.shape[0], X_train.shape[1], 1))
+            
+            # Create dataset using the test data
+            X_test, y_test = create_dataset(test, time_step)
+            X_test = X_test.reshape((X_test.shape[0], X_test.shape[1], 1))
+
+            # Number of future weeks for prediction
+            future_weeks = st.number_input("How many weeks into the future would you like to predict?", min_value=1, value=32)
+
+            # Colors for plotting
+            original_color = st.color_picker("Pick a color for Original Data", "#FF7")
+            train_color = st.color_picker("Pick a color for Train Predictions", "#FF5733")
+            test_color = st.color_picker("Pick a color for Test Predictions", "#3357FF")
+            future_color = st.color_picker("Pick a color for Future Predictions", "#75FF33")
+
+            if st.button("Train Enhanced LSTM and Forecast Sales"):
+                # Model architecture with optimized parameters
+                model = Sequential([
+                    Bidirectional(LSTM(128, return_sequences=True), input_shape=(time_step, 1)),
+                    Dropout(0.3),
+                    Bidirectional(LSTM(64, return_sequences=True)),
+                    Dropout(0.3),
+                    Bidirectional(LSTM(32)),
+                    Dense(1)
+                ])
+
+                model.compile(optimizer='adam', loss='mean_squared_error')
+                
+                # Early stopping callback
+                early_stopping = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
+
+                # Train model with validation data
+                model.fit(X_train, y_train, batch_size=32, epochs=100, validation_data=(X_test, y_test), 
+                        callbacks=[early_stopping], verbose=1)
+
+                # Make predictions on training and test data
+                train_predictions = model.predict(X_train)
+                train_predictions = scaler.inverse_transform(train_predictions)
+                test_predictions = model.predict(X_test)
+                test_predictions = scaler.inverse_transform(test_predictions)
+
+                # Inverse transform for original scale
+                predicted_index_train = df_resampled.index[time_step:train_size]
+                predicted_index_test = df_resampled.index[train_size + time_step:]
+
+                # Prepare future predictions
+                future_predictions = []
+                last_known_data = scaled_data[-time_step:].tolist()
+                for _ in range(future_weeks):
+                    current_batch = np.array(last_known_data[-time_step:]).reshape((1, time_step, 1))
+                    future_pred = model.predict(current_batch)[0]
+                    future_predictions.append(future_pred[0])
+                    last_known_data.append(future_pred)
+                future_predictions = scaler.inverse_transform(np.array(future_predictions).reshape(-1, 1))
+
+                # Generate future dates
+                last_date = df_resampled.index[-1]
+                future_dates = pd.date_range(last_date, periods=future_weeks + 1, freq='W')[1:]
+                future_df = pd.DataFrame(future_predictions, index=future_dates, columns=['Forecast'])
+
+                # Plot results using Plotly
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(x=df_resampled.index, y=data.flatten(), mode='lines', name='Original Sales', line=dict(color=original_color)))
+                fig.add_trace(go.Scatter(x=predicted_index_train, y=train_predictions.flatten(), mode='lines', name='Train Predictions', line=dict(color=train_color)))
+                fig.add_trace(go.Scatter(x=predicted_index_test, y=test_predictions.flatten(), mode='lines', name='Test Predictions', line=dict(color=test_color)))
+                fig.add_trace(go.Scatter(x=future_df.index, y=future_df['Forecast'], mode='lines', name='Future Predictions', line=dict(color=future_color)))
+
+                fig.update_layout(
+                    title='Enhanced Sales Forecasting with Bidirectional LSTM',
+                    xaxis_title='Date',
+                    yaxis_title='Sales',
+                    legend_title='Legend',
+                    template='plotly_white'
+                )
+
+                st.plotly_chart(fig)
+                
+    def forecasting3(self):
+        """Improved Bidirectional GRU forecasting with optimized structure and parameters."""
+        if self.data is not None:
+            target_column = self.target_column
+            # Resample data to weekly frequency
+            df_resampled = self.data[target_column].resample('W').sum()
+            
+            # Prepare data for GRU
+            data = df_resampled.values.reshape(-1, 1)
+            scaler = MinMaxScaler(feature_range=(0, 1))
+            scaled_data = scaler.fit_transform(data)
+
+            # Set time step
+            time_step = st.number_input("Enter the time step (number of weeks) for GRU input:", min_value=1, value=10)
+
+            def create_dataset(dataset, time_step=1):
+                X, Y = [], []
+                for i in range(len(dataset) - time_step):
+                    X.append(dataset[i:i + time_step, 0])
+                    Y.append(dataset[i + time_step, 0])
+                return np.array(X), np.array(Y)
+
+            # Split data into training and testing sets
+            train_size = int(len(scaled_data) * 0.85)  # Using 85% of data for training
+            train, test = scaled_data[:train_size], scaled_data[train_size:]
+            
+            # Create dataset using the training data
+            X_train, y_train = create_dataset(train, time_step)
+            X_train = X_train.reshape((X_train.shape[0], X_train.shape[1], 1))
+            
+            # Create dataset using the test data
+            X_test, y_test = create_dataset(test, time_step)
+            X_test = X_test.reshape((X_test.shape[0], X_test.shape[1], 1))
+
+            # Number of future weeks for prediction
+            future_weeks = st.number_input("How many weeks into the future would you like to predict?", min_value=1, value=32)
+
+            # Colors for plotting
+            original_color = st.color_picker("Pick a color for Original Data", "#FF7")
+            train_color = st.color_picker("Pick a color for Train Predictions", "#FF5733")
+            test_color = st.color_picker("Pick a color for Test Predictions", "#3357FF")
+            future_color = st.color_picker("Pick a color for Future Predictions", "#75FF33")
+
+            if st.button("Train Enhanced GRU and Forecast Sales"):
+                # Model architecture with optimized parameters
+                model = Sequential([
+                    Bidirectional(GRU(128, return_sequences=True), input_shape=(time_step, 1)),
+                    Dropout(0.3),
+                    Bidirectional(GRU(64, return_sequences=True)),
+                    Dropout(0.3),
+                    Bidirectional(GRU(32)),
+                    Dense(1)
+                ])
+
+                model.compile(optimizer='adam', loss='mean_squared_error')
+                
+                # Early stopping callback
+                early_stopping = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
+
+                # Train model with validation data
+                model.fit(X_train, y_train, batch_size=32, epochs=100, validation_data=(X_test, y_test), 
+                        callbacks=[early_stopping], verbose=1)
+
+                # Make predictions on training and test data
+                train_predictions = model.predict(X_train)
+                train_predictions = scaler.inverse_transform(train_predictions)
+                test_predictions = model.predict(X_test)
+                test_predictions = scaler.inverse_transform(test_predictions)
+
+                # Inverse transform for original scale
+                predicted_index_train = df_resampled.index[time_step:train_size]
+                predicted_index_test = df_resampled.index[train_size + time_step:]
+
+                # Prepare future predictions
+                future_predictions = []
+                last_known_data = scaled_data[-time_step:].tolist()
+                for _ in range(future_weeks):
+                    current_batch = np.array(last_known_data[-time_step:]).reshape((1, time_step, 1))
+                    future_pred = model.predict(current_batch)[0]
+                    future_predictions.append(future_pred[0])
+                    last_known_data.append(future_pred)
+                future_predictions = scaler.inverse_transform(np.array(future_predictions).reshape(-1, 1))
+
+                # Generate future dates
+                last_date = df_resampled.index[-1]
+                future_dates = pd.date_range(last_date, periods=future_weeks + 1, freq='W')[1:]
+                future_df = pd.DataFrame(future_predictions, index=future_dates, columns=['Forecast'])
+
+                # Plot results using Plotly
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(x=df_resampled.index, y=data.flatten(), mode='lines', name='Original Sales', line=dict(color=original_color)))
+                fig.add_trace(go.Scatter(x=predicted_index_train, y=train_predictions.flatten(), mode='lines', name='Train Predictions', line=dict(color=train_color)))
+                fig.add_trace(go.Scatter(x=predicted_index_test, y=test_predictions.flatten(), mode='lines', name='Test Predictions', line=dict(color=test_color)))
+                fig.add_trace(go.Scatter(x=future_df.index, y=future_df['Forecast'], mode='lines', name='Future Predictions', line=dict(color=future_color)))
+
+                fig.update_layout(
+                    title='Enhanced Sales Forecasting with Bidirectional GRU',
+                    xaxis_title='Date',
+                    yaxis_title='Sales',
+                    legend_title='Legend',
+                    template='plotly_white'
+                )
+
                 st.plotly_chart(fig)
