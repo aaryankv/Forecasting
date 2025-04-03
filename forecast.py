@@ -16,6 +16,7 @@ from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense, Dropout, Bidirectional, GRU
 from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
 import numpy as np
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
 class forecast:
     def __init__(self):
