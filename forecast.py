@@ -631,6 +631,19 @@ class forecast:
                 train_predictions = scaler.inverse_transform(train_predictions)
                 test_predictions = model.predict(X_test)
                 test_predictions = scaler.inverse_transform(test_predictions)
+                
+                # Compute evaluation metrics
+                y_test_actual = scaler.inverse_transform(y_test.reshape(-1, 1))
+                mae = mean_absolute_error(y_test_actual, test_predictions)
+                mse = mean_squared_error(y_test_actual, test_predictions)
+                rmse = np.sqrt(mse)
+                r2 = r2_score(y_test_actual, test_predictions)
+            
+                st.write("### Model Performance on Test Data")
+                st.write(f"**Mean Absolute Error (MAE):** {mae:.2f}")
+                st.write(f"**Mean Squared Error (MSE):** {mse:.2f}")
+                st.write(f"**Root Mean Squared Error (RMSE):** {rmse:.2f}")
+                st.write(f"**R-Squared (R²) Score:** {r2:.2f}")
 
                 # Inverse transform for original scale
                 predicted_index_train = df_resampled.index[time_step:train_size]
