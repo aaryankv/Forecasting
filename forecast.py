@@ -626,6 +626,12 @@ class forecast:
                 model.fit(X_train, y_train, batch_size=32, epochs=100, validation_data=(X_test, y_test), 
                         callbacks=[early_stopping], verbose=1)
 
+                # Make predictions on test data
+                test_predictions = model.predict(X_test)
+                test_predictions = scaler.inverse_transform(test_predictions)
+                y_test_actual = scaler.inverse_transform(y_test.reshape(-1, 1))
+
+
                 # Make predictions on training and test data
                 train_predictions = model.predict(X_train)
                 train_predictions = scaler.inverse_transform(train_predictions)
